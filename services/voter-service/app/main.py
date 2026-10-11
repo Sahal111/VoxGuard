@@ -10,6 +10,8 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI, Request, Response
 from fastapi.responses import JSONResponse
 
+from app.api.elections import router as elections_router
+from app.api.internal import router as internal_router
 from app.core.config import settings
 from app.infrastructure.database import check_db_ready
 
@@ -18,21 +20,22 @@ logger = logging.getLogger("voter_service")
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    """Startup / shutdown."""
     logger.info("voter-service starting", extra={"service": "voter-service", "port": 8002})
     yield
     logger.info("voter-service shutting down")
 
 
 app = FastAPI(
-    title="VoxGuard voter-service",
+    title="VoxGuard Voter Service",
     version="0.1.0",
     docs_url="/docs" if settings.APP_ENV in ("local", "test") else None,
     lifespan=lifespan,
 )
 
+app.include_router(elections_router)
+app.include_router(internal_router)
 
-# ── Middleware: Request ID & Correlation ID ──────────────────────
+
 @app.middleware("http")
 async def request_context(request: Request, call_next):
     request_id = request.headers.get("x-request-id") or str(uuid.uuid4())
@@ -46,7 +49,6 @@ async def request_context(request: Request, call_next):
 
     response.headers["X-Request-ID"] = request_id
     response.headers["X-Correlation-ID"] = correlation_id
-
     logger.info(
         "request",
         extra={
@@ -56,20 +58,15 @@ async def request_context(request: Request, call_next):
             "status": response.status_code,
             "elapsed_ms": elapsed_ms,
             "request_id": request_id,
-            "correlation_id": correlation_id,
         },
     )
     return response
 
 
-# ── Error handler ───────────────────────────────────────────────
 @app.exception_handler(Exception)
 async def global_exception_handler(request: Request, exc: Exception):
     request_id = getattr(request.state, "request_id", "unknown")
-    logger.exception(
-        "unhandled_error",
-        extra={"service": "voter-service", "request_id": request_id},
-    )
+    logger.exception("unhandled_error", extra={"service": "voter-service", "request_id": request_id})
     return JSONResponse(
         status_code=500,
         content={
@@ -83,7 +80,6 @@ async def global_exception_handler(request: Request, exc: Exception):
     )
 
 
-# ── Health endpoints ────────────────────────────────────────────
 @app.get("/health/live", tags=["health"])
 async def health_live():
     return {"status": "ok", "service": "voter-service"}
@@ -91,7 +87,7 @@ async def health_live():
 
 @app.get("/health/ready", tags=["health"])
 async def health_ready():
-    checks = {}
+    checks: dict = {}
     all_ok = True
     db_ok, db_msg = await check_db_ready()
     if not db_ok:
@@ -99,9 +95,8 @@ async def health_ready():
         all_ok = False
     else:
         checks["database"] = {"status": "ok"}
-    status = "ok" if all_ok else "degraded"
     code = 200 if all_ok else 503
     return JSONResponse(
         status_code=code,
-        content={"status": status, "service": "voter-service", "checks": checks},
+        content={"status": "ok" if all_ok else "degraded", "service": "voter-service", "checks": checks},
     )

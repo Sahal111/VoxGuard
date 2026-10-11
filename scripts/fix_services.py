@@ -205,25 +205,66 @@ async def check_db_ready(timeout: float = 3.0) -> tuple[bool, str]:
 '''
 
 
-for svc_name, (slug, port, db_env) in DB_SERVICES.items():
-    svc_dir = os.path.join(ROOT, svc_name)
+import argparse
 
-    # main.py
-    main_path = os.path.join(svc_dir, "app", "main.py")
-    with open(main_path, "w") as f:
-        f.write(gen_main(svc_name, slug, port, True))
-    print(f"  FIXED: {svc_name}/app/main.py")
+PROTECTED_SERVICES = {"auth-service", "voter-service"}
 
-    # config.py
-    cfg_path = os.path.join(svc_dir, "app", "core", "config.py")
-    with open(cfg_path, "w") as f:
-        f.write(gen_config(slug, db_env))
-    print(f"  FIXED: {svc_name}/app/core/config.py")
 
-    # database.py
-    db_path = os.path.join(svc_dir, "app", "infrastructure", "database.py")
-    with open(db_path, "w") as f:
-        f.write(gen_database(svc_name, slug, db_env))
-    print(f"  FIXED: {svc_name}/app/infrastructure/database.py")
+def run():
+    parser = argparse.ArgumentParser(
+        description="Regenerate boilerplate files for skeleton backend services."
+    )
+    parser.add_argument(
+        "--service",
+        choices=list(DB_SERVICES.keys()),
+        help="Target only a specific service instead of all.",
+    )
+    parser.add_argument(
+        "--force",
+        action="store_true",
+        help="Explicitly permit overwriting existing skeleton files.",
+    )
+    parser.add_argument(
+        "--allow-protected",
+        action="store_true",
+        help="DANGEROUS: Allow overwriting protected services with active implementations.",
+    )
+    args = parser.parse_args()
 
-print("\n✓ All service files regenerated with correct formatting.")
+    targets = (
+        {args.service: DB_SERVICES[args.service]}
+        if args.service
+        else DB_SERVICES
+    )
+
+    for svc_name, (slug, port, db_env) in targets.items():
+        if svc_name in PROTECTED_SERVICES and not args.allow_protected:
+            print(f"  [SKIPPED] {svc_name} is PROTECTED (contains active implementation). Pass --allow-protected to override.")
+            continue
+
+        svc_dir = os.path.join(ROOT, svc_name)
+        main_path = os.path.join(svc_dir, "app", "main.py")
+        cfg_path = os.path.join(svc_dir, "app", "core", "config.py")
+        db_path = os.path.join(svc_dir, "app", "infrastructure", "database.py")
+
+        if os.path.exists(main_path) and not args.force:
+            print(f"  [REFUSED] {main_path} already exists. Pass --force to overwrite skeleton files.")
+            continue
+
+        with open(main_path, "w") as f:
+            f.write(gen_main(svc_name, slug, port, True))
+        print(f"  FIXED: {svc_name}/app/main.py")
+
+        with open(cfg_path, "w") as f:
+            f.write(gen_config(slug, db_env))
+        print(f"  FIXED: {svc_name}/app/core/config.py")
+
+        with open(db_path, "w") as f:
+            f.write(gen_database(svc_name, slug, db_env))
+        print(f"  FIXED: {svc_name}/app/infrastructure/database.py")
+
+    print("\n✓ Service guard verification complete.")
+
+
+if __name__ == "__main__":
+    run()

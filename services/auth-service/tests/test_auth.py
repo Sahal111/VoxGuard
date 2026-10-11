@@ -20,13 +20,13 @@ def make_jwt(
     user_id: str | None = None,
     role: str = "VOTER",
     expired: bool = False,
-    secret: str = "test-secret-must-be-long-enough",
+    secret: str = "test-secret-key-must-be-at-least-32-chars-long!",
 ) -> str:
     uid = user_id or str(uuid.uuid4())
     now = datetime.now(timezone.utc)
     exp = now - timedelta(minutes=1) if expired else now + timedelta(minutes=15)
     return jwt.encode(
-        {"sub": uid, "email": "t@example.test", "role": role, "display_name": "T",
+        {"sub": uid, "email": "t@example.com", "role": role, "display_name": "T",
          "iat": now, "exp": exp, "jti": str(uuid.uuid4())},
         secret,
         algorithm="HS256",
@@ -37,7 +37,7 @@ def make_user_obj(**kwargs):
     """Create a mock User ORM object."""
     user = MagicMock()
     user.id = kwargs.get("id", uuid.uuid4())
-    user.email = kwargs.get("email", "test@example.test")
+    user.email = kwargs.get("email", "test@example.com")
     user.display_name = kwargs.get("display_name", "Test User")
     user.password_hash = kwargs.get("password_hash", "$2b$12$placeholder")
     user.role = kwargs.get("role", "VOTER")
@@ -60,12 +60,12 @@ def client():
 # ══════════════════════════════════════════════════════════════════
 @pytest.mark.asyncio
 async def test_register_voter_success(client):
-    user = make_user_obj(email="new@example.test", role="VOTER")
+    user = make_user_obj(email="new@example.com", role="VOTER")
     with (
         patch("app.api.auth.register_user", new_callable=AsyncMock, return_value=user),
     ):
         resp = await client.post(f"{BASE}/register", json={
-            "email": "new@example.test",
+            "email": "new@example.com",
             "password": "secure-password-123",
             "display_name": "New User",
         })
@@ -87,7 +87,7 @@ async def test_register_duplicate_email(client):
               side_effect=AuthError("CONFLICT", "Email already registered.", 409)),
     ):
         resp = await client.post(f"{BASE}/register", json={
-            "email": "existing@example.test",
+            "email": "existing@example.com",
             "password": "secure-password-123",
             "display_name": "Existing",
         })
@@ -106,7 +106,7 @@ async def test_register_non_voter_without_admin(client):
               side_effect=AuthError("FORBIDDEN", "Only ADMIN can create non-VOTER accounts.", 403)),
     ):
         resp = await client.post(f"{BASE}/register", json={
-            "email": "admin2@example.test",
+            "email": "admin2@example.com",
             "password": "secure-password-123",
             "display_name": "Admin2",
             "role": "ADMIN",
@@ -123,7 +123,7 @@ async def test_login_success(client):
     with patch("app.api.auth.login_user", new_callable=AsyncMock,
                return_value=("access.token.here", "raw-refresh-token", 900, user)):
         resp = await client.post(f"{BASE}/login", json={
-            "email": "test@example.test",
+            "email": "test@example.com",
             "password": "valid-password-123",
         })
     assert resp.status_code == 200
@@ -143,7 +143,7 @@ async def test_login_wrong_password(client):
     with patch("app.api.auth.login_user", new_callable=AsyncMock,
                side_effect=AuthError("UNAUTHORIZED", "Invalid credentials.", 401)):
         resp = await client.post(f"{BASE}/login", json={
-            "email": "test@example.test",
+            "email": "test@example.com",
             "password": "wrong-password",
         })
     assert resp.status_code == 401
@@ -162,7 +162,7 @@ async def test_login_nonexistent_account(client):
     with patch("app.api.auth.login_user", new_callable=AsyncMock,
                side_effect=AuthError("UNAUTHORIZED", "Invalid credentials.", 401)):
         resp = await client.post(f"{BASE}/login", json={
-            "email": "nobody@example.test",
+            "email": "nobody@example.com",
             "password": "any-password-123",
         })
     assert resp.status_code == 401
@@ -201,7 +201,7 @@ async def test_protected_endpoint_rejects_invalid_token(client):
 @pytest.mark.asyncio
 async def test_expired_token_rejected(client):
     with patch("app.core.config.settings") as mock_settings:
-        mock_settings.JWT_SECRET = "test-secret-must-be-long-enough"
+        mock_settings.JWT_SECRET = "test-secret-key-must-be-at-least-32-chars-long!"
         mock_settings.JWT_ALGORITHM = "HS256"
         expired_token = make_jwt(expired=True)
 
@@ -250,7 +250,7 @@ async def test_logout_success(client):
     user_id = str(uuid.uuid4())
     with (
         patch("app.core.security.decode_access_token",
-              return_value={"sub": user_id, "role": "VOTER", "email": "t@e.test",
+              return_value={"sub": user_id, "role": "VOTER", "email": "t@example.com",
                             "display_name": "T", "jti": "x", "exp": 9999999999}),
         patch("app.api.auth.logout_user", new_callable=AsyncMock),
     ):
@@ -274,7 +274,7 @@ async def test_cannot_self_assign_admin_role(client):
     with patch("app.api.auth.register_user", new_callable=AsyncMock,
                side_effect=AuthError("FORBIDDEN", "Only ADMIN can create non-VOTER accounts.", 403)):
         resp = await client.post(f"{BASE}/register", json={
-            "email": "hacker@example.test",
+            "email": "hacker@example.com",
             "password": "secure-password-123",
             "display_name": "Hacker",
             "role": "ADMIN",
@@ -288,7 +288,7 @@ async def test_cannot_self_assign_admin_role(client):
 @pytest.mark.asyncio
 async def test_register_password_too_short(client):
     resp = await client.post(f"{BASE}/register", json={
-        "email": "test@example.test",
+        "email": "test@example.com",
         "password": "short",
         "display_name": "Test",
     })

@@ -1,0 +1,280 @@
+# ============================================================
+# VoxGuard — Docker Compose (development)
+# ============================================================
+# Usage:
+#   cp .env.example .env   # Edit values
+#   docker compose up -d
+#   docker compose ps
+# ============================================================
+
+name: voxguard
+
+services:
+  # ── Infrastructure ──────────────────────────────────────────
+
+  postgres:
+    image: postgres:16-alpine
+    container_name: voxguard-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-voxguard_admin}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      AUTH_DB_PASSWORD: ${AUTH_DB_PASSWORD:-changeme_auth}
+      VOTER_DB_PASSWORD: ${VOTER_DB_PASSWORD:-changeme_voter}
+      BALLOT_DB_PASSWORD: ${BALLOT_DB_PASSWORD:-changeme_ballot}
+      AUDIT_DB_PASSWORD: ${AUDIT_DB_PASSWORD:-changeme_audit}
+      RESULT_DB_PASSWORD: ${RESULT_DB_PASSWORD:-changeme_result}
+      SECURITY_DB_PASSWORD: ${SECURITY_DB_PASSWORD:-changeme_security}
+    volumes:
+      - pg_data:/var/lib/postgresql/data
+      - ./infra/docker/postgres/init-databases.sh:/docker-entrypoint-initdb.d/init-databases.sh:ro
+    ports:
+      - "127.0.0.1:5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-voxguard_admin}"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+    networks:
+      - voxguard-net
+
+  rabbitmq:
+    image: rabbitmq:3.13-management-alpine
+    container_name: voxguard-rabbitmq
+    restart: unless-stopped
+    environment:
+      RABBITMQ_DEFAULT_USER: ${RABBITMQ_DEFAULT_USER:-voxguard}
+      RABBITMQ_DEFAULT_PASS: ${RABBITMQ_DEFAULT_PASS}
+      RABBITMQ_DEFAULT_VHOST: ${RABBITMQ_DEFAULT_VHOST:-voxguard}
+    volumes:
+      - rabbitmq_data:/var/lib/rabbitmq
+    ports:
+      - "127.0.0.1:5672:5672"
+      - "127.0.0.1:15672:15672"
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - voxguard-net
+
+  redis:
+    image: redis:7-alpine
+    container_name: voxguard-redis
+    restart: unless-stopped
+    command: redis-server --maxmemory 128mb --maxmemory-policy allkeys-lru
+    ports:
+      - "127.0.0.1:6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+    networks:
+      - voxguard-net
+
+  # ── Frontend ────────────────────────────────────────────────
+
+  frontend:
+    build:
+      context: .
+      dockerfile: apps/web/Dockerfile
+    container_name: voxguard-frontend
+    restart: unless-stopped
+    ports:
+      - "5173:5173"
+    environment:
+      VITE_API_BASE_URL: ${VITE_API_BASE_URL:-http://localhost:8000/api/v1}
+    networks:
+      - voxguard-net
+
+  # ── API Gateway ─────────────────────────────────────────────
+
+  api-gateway:
+    build:
+      context: .
+      dockerfile: services/api-gateway/Dockerfile
+    container_name: voxguard-gateway
+    restart: unless-stopped
+    ports:
+      - "8000:8000"
+    environment:
+      APP_ENV: ${APP_ENV:-local}
+      AUTH_SERVICE_URL: http://auth-service:8001
+      VOTER_SERVICE_URL: http://voter-service:8002
+      BALLOT_SERVICE_URL: http://ballot-service:8003
+      AUDIT_SERVICE_URL: http://audit-service:8004
+      RESULT_SERVICE_URL: http://result-service:8005
+      SECURITY_SERVICE_URL: http://security-service:8006
+      REDIS_URL: redis://redis:6379/0
+    depends_on:
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health/live')"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+    networks:
+      - voxguard-net
+
+  # ── Backend Services ────────────────────────────────────────
+
+  auth-service:
+    build:
+      context: .
+      dockerfile: services/auth-service/Dockerfile
+    container_name: voxguard-auth
+    restart: unless-stopped
+    environment:
+      APP_ENV: ${APP_ENV:-local}
+      AUTH_DATABASE_URL: ${AUTH_DATABASE_URL}
+      REDIS_URL: redis://redis:6379/0
+      JWT_SECRET: ${JWT_SECRET}
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8001/health/live')"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+    networks:
+      - voxguard-net
+
+  voter-service:
+    build:
+      context: .
+      dockerfile: services/voter-service/Dockerfile
+    container_name: voxguard-voter
+    restart: unless-stopped
+    environment:
+      APP_ENV: ${APP_ENV:-local}
+      VOTER_DATABASE_URL: ${VOTER_DATABASE_URL}
+      RABBITMQ_URL: ${RABBITMQ_URL}
+      ELIGIBILITY_PEPPER: ${ELIGIBILITY_PEPPER}
+    depends_on:
+      postgres:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8002/health/live')"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+    networks:
+      - voxguard-net
+
+  ballot-service:
+    build:
+      context: .
+      dockerfile: services/ballot-service/Dockerfile
+    container_name: voxguard-ballot
+    restart: unless-stopped
+    environment:
+      APP_ENV: ${APP_ENV:-local}
+      BALLOT_DATABASE_URL: ${BALLOT_DATABASE_URL}
+      RABBITMQ_URL: ${RABBITMQ_URL}
+      REDIS_URL: redis://redis:6379/0
+      VOTE_TICKET_SECRET: ${VOTE_TICKET_SECRET}
+    depends_on:
+      postgres:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8003/health/live')"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+    networks:
+      - voxguard-net
+
+  audit-service:
+    build:
+      context: .
+      dockerfile: services/audit-service/Dockerfile
+    container_name: voxguard-audit
+    restart: unless-stopped
+    environment:
+      APP_ENV: ${APP_ENV:-local}
+      AUDIT_DATABASE_URL: ${AUDIT_DATABASE_URL}
+      RABBITMQ_URL: ${RABBITMQ_URL}
+      AUDIT_CHECKPOINT_KEY: ${AUDIT_CHECKPOINT_KEY}
+    volumes:
+      - audit_checkpoints:/app/checkpoints
+    depends_on:
+      postgres:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8004/health/live')"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+    networks:
+      - voxguard-net
+
+  result-service:
+    build:
+      context: .
+      dockerfile: services/result-service/Dockerfile
+    container_name: voxguard-result
+    restart: unless-stopped
+    environment:
+      APP_ENV: ${APP_ENV:-local}
+      RESULT_DATABASE_URL: ${RESULT_DATABASE_URL}
+      RABBITMQ_URL: ${RABBITMQ_URL}
+    depends_on:
+      postgres:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8005/health/live')"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+    networks:
+      - voxguard-net
+
+  security-service:
+    build:
+      context: .
+      dockerfile: services/security-service/Dockerfile
+    container_name: voxguard-security
+    restart: unless-stopped
+    environment:
+      APP_ENV: ${APP_ENV:-local}
+      SECURITY_DATABASE_URL: ${SECURITY_DATABASE_URL}
+      RABBITMQ_URL: ${RABBITMQ_URL}
+      FINGERPRINT_SECRET: ${FINGERPRINT_SECRET}
+      ATTACK_LAB_ENABLED: ${ATTACK_LAB_ENABLED:-false}
+    depends_on:
+      postgres:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8006/health/live')"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+    networks:
+      - voxguard-net
+
+# ── Networks ────────────────────────────────────────────────────────
+networks:
+  voxguard-net:
+    driver: bridge
+
+# ── Volumes ─────────────────────────────────────────────────────────
+volumes:
+  pg_data:
+  rabbitmq_data:
+  audit_checkpoints:

@@ -10,6 +10,8 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI, Request, Response
 from fastapi.responses import JSONResponse
 
+from app.api.ballots import router as ballot_router
+from app.api.deps import BallotAuthError
 from app.core.config import settings
 from app.infrastructure.database import check_db_ready
 
@@ -30,6 +32,8 @@ app = FastAPI(
     docs_url="/docs" if settings.APP_ENV in ("local", "test") else None,
     lifespan=lifespan,
 )
+
+app.include_router(ballot_router)
 
 
 # ── Middleware: Request ID & Correlation ID ──────────────────────
@@ -62,7 +66,23 @@ async def request_context(request: Request, call_next):
     return response
 
 
-# ── Error handler ───────────────────────────────────────────────
+# ── Error handlers ──────────────────────────────────────────────
+@app.exception_handler(BallotAuthError)
+async def auth_error_handler(request: Request, exc: BallotAuthError):
+    request_id = getattr(request.state, "request_id", "unknown")
+    return JSONResponse(
+        status_code=exc.status_code,
+        content={
+            "error": {
+                "code": exc.code,
+                "message": exc.message,
+                "details": [],
+                "request_id": request_id,
+            }
+        },
+    )
+
+
 @app.exception_handler(Exception)
 async def global_exception_handler(request: Request, exc: Exception):
     request_id = getattr(request.state, "request_id", "unknown")

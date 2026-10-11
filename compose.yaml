@@ -183,7 +183,11 @@ services:
       BALLOT_DATABASE_URL: ${BALLOT_DATABASE_URL}
       RABBITMQ_URL: ${RABBITMQ_URL}
       REDIS_URL: redis://redis:6379/0
+      JWT_SECRET: ${JWT_SECRET}
       VOTE_TICKET_SECRET: ${VOTE_TICKET_SECRET}
+      RECEIPT_HMAC_KEY: ${RECEIPT_HMAC_KEY:-dev-receipt-hmac-key-must-be-secret-in-prod}
+      INTERNAL_API_KEY: ${INTERNAL_API_KEY}
+      VOTER_SERVICE_URL: http://voter-service:8002
     depends_on:
       postgres:
         condition: service_healthy

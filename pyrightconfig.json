@@ -1,0 +1,20 @@
+{
+  "pythonVersion": "3.10",
+  "pythonPlatform": "Darwin",
+  "pythonPath": "/Library/Frameworks/Python.framework/Versions/3.10/bin/python3",
+  "venvPath": ".",
+  "extraPaths": [
+    "packages/contracts"
+  ],
+  "reportMissingImports": "warning",
+  "reportMissingModuleSource": "warning",
+  "typeCheckingMode": "basic",
+  "useLibraryCodeForTypes": true,
+  "exclude": [
+    "**/node_modules",
+    "**/__pycache__",
+    "**/dist",
+    "**/build",
+    ".git"
+  ]
+}

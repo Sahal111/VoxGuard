@@ -156,6 +156,9 @@ services:
       VOTER_DATABASE_URL: ${VOTER_DATABASE_URL}
       RABBITMQ_URL: ${RABBITMQ_URL}
       ELIGIBILITY_PEPPER: ${ELIGIBILITY_PEPPER}
+      JWT_SECRET: ${JWT_SECRET}
+      INTERNAL_API_KEY: ${INTERNAL_API_KEY}
+      ATTACK_LAB_ENABLED: ${ATTACK_LAB_ENABLED:-false}
     depends_on:
       postgres:
         condition: service_healthy

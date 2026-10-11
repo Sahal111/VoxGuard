@@ -29,6 +29,7 @@ from app.schemas import (
     PageResponse,
     VoterImportItem,
 )
+# pyrefly: ignore [missing-import]
 from voxguard_contracts.events import EventType
 
 

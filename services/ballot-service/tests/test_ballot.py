@@ -218,7 +218,7 @@ async def test_invalid_vote_ticket_bad_signature(client):
     token = make_user_jwt(role="VOTER")
     election_id = uuid.uuid4()
     elig_ref = make_eligibility_ref()
-    bad_ticket = make_vote_ticket(elig_ref, election_id, secret="wrong-secret-key!!")
+    bad_ticket = make_vote_ticket(elig_ref, election_id, secret="wrong-secret-key-min-32chars-padded!!")
 
     with patch(
         "app.api.ballots._validate_election_open",
@@ -560,7 +560,9 @@ async def test_receipt_lookup_success(client):
     election_id = uuid.uuid4()
     accepted_at = datetime.now(timezone.utc)
 
-    from app.services import BallotError
+    from app.core.security import compute_receipt_code
+    receipt_code = compute_receipt_code(receipt_id)
+
     with patch(
         "app.api.ballots.get_receipt",
         new_callable=AsyncMock,
@@ -573,7 +575,10 @@ async def test_receipt_lookup_success(client):
     ):
         resp = await client.get(
             f"/api/v1/ballots/receipt/{receipt_id}",
-            headers={"Authorization": f"Bearer {token}"},
+            headers={
+                "Authorization": f"Bearer {token}",
+                "X-Receipt-Code": receipt_code,
+            },
         )
     assert resp.status_code == 200
     data = resp.json()
@@ -586,11 +591,49 @@ async def test_receipt_lookup_success(client):
 
 
 # ══════════════════════════════════════════════════════════════════
+# Test 18b — Receipt lookup missing X-Receipt-Code → 422
+# ══════════════════════════════════════════════════════════════════
+@pytest.mark.asyncio
+async def test_receipt_lookup_missing_code(client):
+    token = make_user_jwt(role="VOTER")
+    receipt_id = uuid.uuid4()
+    resp = await client.get(
+        f"/api/v1/ballots/receipt/{receipt_id}",
+        headers={"Authorization": f"Bearer {token}"},
+        # No X-Receipt-Code header
+    )
+    assert resp.status_code == 422
+    assert resp.json()["error"]["code"] == "VALIDATION_ERROR"
+    assert any(d["field"] == "X-Receipt-Code" for d in resp.json()["error"]["details"])
+
+
+# ══════════════════════════════════════════════════════════════════
+# Test 18c — Receipt lookup wrong X-Receipt-Code → 404 (not differentiated)
+# ══════════════════════════════════════════════════════════════════
+@pytest.mark.asyncio
+async def test_receipt_lookup_wrong_code(client):
+    token = make_user_jwt(role="VOTER")
+    receipt_id = uuid.uuid4()
+    resp = await client.get(
+        f"/api/v1/ballots/receipt/{receipt_id}",
+        headers={
+            "Authorization": f"Bearer {token}",
+            "X-Receipt-Code": "wrong-code-that-is-48-chars-long-xxxxxxxxxxx",
+        },
+    )
+    assert resp.status_code == 404
+    assert resp.json()["error"]["code"] == "RECEIPT_NOT_FOUND"
+
+
+# ══════════════════════════════════════════════════════════════════
 # Test 19 — Receipt not found → 404 RECEIPT_NOT_FOUND
 # ══════════════════════════════════════════════════════════════════
 @pytest.mark.asyncio
 async def test_receipt_not_found(client):
     token = make_user_jwt(role="VOTER")
+    receipt_id = uuid.uuid4()
+    from app.core.security import compute_receipt_code
+    correct_code = compute_receipt_code(receipt_id)
     from app.services import BallotError
     with patch(
         "app.api.ballots.get_receipt",
@@ -598,8 +641,11 @@ async def test_receipt_not_found(client):
         side_effect=BallotError("RECEIPT_NOT_FOUND", "Receipt tidak ditemukan.", 404),
     ):
         resp = await client.get(
-            f"/api/v1/ballots/receipt/{uuid.uuid4()}",
-            headers={"Authorization": f"Bearer {token}"},
+            f"/api/v1/ballots/receipt/{receipt_id}",
+            headers={
+                "Authorization": f"Bearer {token}",
+                "X-Receipt-Code": correct_code,
+            },
         )
     assert resp.status_code == 404
     assert resp.json()["error"]["code"] == "RECEIPT_NOT_FOUND"

@@ -18,6 +18,7 @@
         "alembic>=1.13,<2",
         "psycopg2-binary>=2.9,<3",
         "PyJWT>=2.8,<3",
+        "aio-pika>=9.4,<10",
     ]
 
     [project.optional-dependencies]

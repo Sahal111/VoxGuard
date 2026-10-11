@@ -28,6 +28,9 @@ class Settings(BaseSettings):
     # Idempotency
     IDEMPOTENCY_TTL_SECONDS: int = 86_400  # 24 h
 
+    # RabbitMQ (optional — publisher disabled if not set)
+    RABBITMQ_URL: str = ""
+
     model_config = {"env_file": ".env", "extra": "ignore"}
 
 

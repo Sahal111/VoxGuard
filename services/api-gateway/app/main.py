@@ -123,18 +123,36 @@ def _find_upstream(path: str) -> tuple[str, str] | None:
     return None
 
 
-def _build_upstream_headers(request: Request) -> dict[str, str]:
-    """Build headers for upstream request, including request/correlation IDs."""
-    headers = {}
-    # Forward safe headers
+def _build_upstream_headers(request: Request, upstream_path: str = "") -> dict[str, str]:
+    """Build headers for upstream request.
+
+    Defense-in-depth: strip X-User-Id and X-User-Email for ballot routes
+    per API Contract §6.1 — ballot-service must not receive identity headers
+    to prevent any accidental PII association with ballot data.
+    """
+    # Headers that must never be forwarded from client (hop-by-hop + identity spoofing)
+    HOP_BY_HOP = frozenset(("host", "connection", "transfer-encoding", "keep-alive"))
+
+    # Identity headers stripped for ALL routes (they must only come from auth flow)
+    ALWAYS_STRIP = frozenset(("x-user-id", "x-user-email", "x-internal-key"))
+
+    # Additional identity headers stripped specifically for ballot routes (defense-in-depth)
+    BALLOT_STRIP = frozenset(("x-forwarded-user", "x-auth-user", "x-voter-id"))
+
+    is_ballot_route = upstream_path.startswith("/api/v1/ballots")
+
+    headers: dict[str, str] = {}
     for key, value in request.headers.items():
         lower_key = key.lower()
-        # Skip hop-by-hop and host headers
-        if lower_key in ("host", "connection", "transfer-encoding", "keep-alive"):
+        if lower_key in HOP_BY_HOP:
+            continue
+        if lower_key in ALWAYS_STRIP:
+            continue
+        if is_ballot_route and lower_key in BALLOT_STRIP:
             continue
         headers[key] = value
 
-    # Ensure request/correlation IDs
+    # Ensure request/correlation IDs are always set
     headers["X-Request-ID"] = request.state.request_id
     headers["X-Correlation-ID"] = request.state.correlation_id
     return headers
@@ -177,7 +195,7 @@ async def proxy(request: Request, path: str):
     target_url = f"{upstream_url}{upstream_path}"
 
     body = await request.body()
-    headers = _build_upstream_headers(request)
+    headers = _build_upstream_headers(request, upstream_path=full_path)
 
     try:
         assert http_client is not None

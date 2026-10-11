@@ -226,9 +226,46 @@ async def handle_get_receipt(
 ):
     """GET /api/v1/ballots/receipt/{receipt_id} — Check receipt status.
 
+    Header: X-Receipt-Code (required per API Contract §5.4 No.16).
     Returns receipt without candidate choice, eligibility_ref, or voter identity.
+    Error 404 if id not found OR receipt_code wrong (not differentiated per contract).
     audit_status: PENDING | RECORDED.
     """
+    import secrets as _secrets
+    rid = getattr(request.state, "request_id", "unknown")
+
+    # ── Validate X-Receipt-Code header ───────────────────────────
+    provided_code = request.headers.get("x-receipt-code", "").strip()
+    if not provided_code:
+        return JSONResponse(
+            status_code=422,
+            content={
+                "error": {
+                    "code": "VALIDATION_ERROR",
+                    "message": "Header X-Receipt-Code wajib ada.",
+                    "details": [{"field": "X-Receipt-Code", "issue": "Header wajib ada."}],
+                    "request_id": rid,
+                }
+            },
+        )
+
+    # Compute expected code and constant-time compare
+    expected_code = compute_receipt_code(receipt_id)
+    if not _secrets.compare_digest(provided_code, expected_code):
+        # Return 404 (same as not found — per contract, not differentiated)
+        return JSONResponse(
+            status_code=404,
+            content={
+                "error": {
+                    "code": "RECEIPT_NOT_FOUND",
+                    "message": "Receipt tidak ditemukan.",
+                    "details": [],
+                    "request_id": rid,
+                }
+            },
+        )
+
+    # ── Fetch receipt data ────────────────────────────────────────
     try:
         data = await get_receipt(db, receipt_id=receipt_id)
     except BallotError as exc:

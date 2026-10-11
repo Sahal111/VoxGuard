@@ -4,7 +4,14 @@
   "pythonPath": "/Library/Frameworks/Python.framework/Versions/3.10/bin/python3",
   "venvPath": ".",
   "extraPaths": [
-    "packages/contracts"
+    "packages/contracts",
+    "services/auth-service",
+    "services/voter-service",
+    "services/ballot-service",
+    "services/audit-service",
+    "services/result-service",
+    "services/security-service",
+    "services/api-gateway"
   ],
   "reportMissingImports": "warning",
   "reportMissingModuleSource": "warning",

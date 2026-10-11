@@ -15,15 +15,41 @@ from app.api.deps import BallotAuthError
 from app.core.config import settings
 from app.infrastructure.database import check_db_ready
 
+import asyncio
+
+from app.infrastructure.database import async_session
+from app.infrastructure.publisher import run_outbox_publisher_loop
+
 logger = logging.getLogger("ballot_service")
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    """Startup / shutdown."""
+    """Startup: start outbox publisher task. Shutdown: cancel it."""
     logger.info("ballot-service starting", extra={"service": "ballot-service", "port": 8003})
+
+    # Start outbox relay only when RABBITMQ_URL is configured
+    _publisher_task = None
+    rabbitmq_url = getattr(settings, "RABBITMQ_URL", "")
+    if rabbitmq_url:
+        _publisher_task = asyncio.create_task(
+            run_outbox_publisher_loop(rabbitmq_url, async_session),
+            name="outbox-publisher",
+        )
+        logger.info("outbox_publisher_task_started")
+    else:
+        logger.warning("outbox_publisher_disabled_no_rabbitmq_url")
+
     yield
+
     logger.info("ballot-service shutting down")
+    if _publisher_task is not None and not _publisher_task.done():
+        _publisher_task.cancel()
+        try:
+            await _publisher_task
+        except asyncio.CancelledError:
+            pass
+        logger.info("outbox_publisher_task_stopped")
 
 
 app = FastAPI(

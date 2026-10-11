@@ -55,12 +55,12 @@ def decode_vote_ticket(token: str, election_id: uuid.UUID) -> dict:
 
 # ── Receipt HMAC code ──────────────────────────────────────────
 def compute_receipt_code(receipt_id: uuid.UUID) -> str:
-    """Derive receipt_code = HMAC-SHA256(RECEIPT_HMAC_KEY, receipt_id) → hex24.
+    """Derive receipt_code = HMAC-SHA256(RECEIPT_HMAC_KEY, receipt_id) → hex48.
 
     The code can be recomputed for replay without persisting it in the DB.
-    The receipt_code is truncated to 24 bytes (48 hex chars) for readability.
+    The receipt_code is truncated to 48 hex chars for readability.
     """
-    digest = hmac.new(
+    digest = hmac.HMAC(
         settings.RECEIPT_HMAC_KEY.encode("utf-8"),
         str(receipt_id).encode("utf-8"),
         hashlib.sha256,

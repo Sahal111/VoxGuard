@@ -248,25 +248,31 @@ async def cast_vote(
             stored = existing_rec.response_snapshot
             return stored, True
 
-        # ── Step 2: INSERT ballot ────────────────────────────────────
-        ballot_stmt = insert(Ballot).values(
-            election_id=election_id,
-            eligibility_ref=eligibility_ref,
-            candidate_id=candidate_id,
-            ballot_nonce=nonce,
-            ballot_commitment=commitment,
-            receipt_id=receipt_id,
-            outbox_event_id=outbox_id,
-            status="ACCEPTED",
-            accepted_at=now,
+        # ── Step 2: INSERT ballot (RETURNING id) ─────────────────────
+        ballot_stmt = (
+            insert(Ballot)
+            .values(
+                election_id=election_id,
+                eligibility_ref=eligibility_ref,
+                candidate_id=candidate_id,
+                ballot_nonce=nonce,
+                ballot_commitment=commitment,
+                receipt_id=receipt_id,
+                outbox_event_id=outbox_id,
+                status="ACCEPTED",
+                accepted_at=now,
+            )
+            .returning(Ballot.id)
         )
-        await db.execute(ballot_stmt)
+        ballot_res = await db.execute(ballot_stmt)
+        ballot_row = ballot_res.fetchone()
+        ballot_db_id = str(ballot_row[0]) if ballot_row else None
 
         # ── Step 3: INSERT outbox event (VoteAccepted) ───────────────
         # Privacy: candidate_id NOT included in payload (SAD §11, §8.3)
         outbox_payload: dict[str, Any] = {
             "election_id": str(election_id),
-            "ballot_id": None,     # will be filled after we know ballot id if needed
+            "ballot_id": ballot_db_id,          # DB-generated uuid via RETURNING
             "receipt_id": str(receipt_id),
             "accepted_at": now.isoformat(),
             "ballot_commitment": commitment,

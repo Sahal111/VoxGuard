@@ -28,7 +28,8 @@ from datetime import datetime, timedelta, timezone
 from typing import Any
 
 import httpx
-from sqlalchemy import insert, select, text, update
+from sqlalchemy import select, text, update
+from sqlalchemy.dialects.postgresql import insert  # generic insert() has no on_conflict_do_nothing
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 

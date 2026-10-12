@@ -210,7 +210,10 @@ services:
     environment:
       APP_ENV: ${APP_ENV:-local}
       AUDIT_DATABASE_URL: ${AUDIT_DATABASE_URL}
+      AUDIT_DATABASE_URL_SYNC: ${AUDIT_DATABASE_URL_SYNC}
       RABBITMQ_URL: ${RABBITMQ_URL}
+      JWT_SECRET: ${JWT_SECRET}
+      INTERNAL_API_KEY: ${INTERNAL_API_KEY}
       AUDIT_CHECKPOINT_KEY: ${AUDIT_CHECKPOINT_KEY}
     volumes:
       - audit_checkpoints:/app/checkpoints

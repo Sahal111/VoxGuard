@@ -1,4 +1,4 @@
-"""Cryptographic helpers for audit-service: hash chain, HMAC checkpoint."""
+"""Cryptographic helpers for audit-service: hash chain, HMAC checkpoint, JWT."""
 
 from __future__ import annotations
 
@@ -7,26 +7,35 @@ import hmac
 import json
 import secrets
 import uuid
-from datetime import datetime
+from datetime import datetime, timezone
+
+import jwt
 
 from app.core.config import settings
 
 
 # ── Hash chain ─────────────────────────────────────────────────
+def canonical_timestamp(value: datetime) -> str:
+    """UTC, microsecond precision, fixed width (SAD §12). Naive datetimes are rejected."""
+    if value.tzinfo is None:
+        raise ValueError("timestamp must be timezone-aware")
+    return value.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.%fZ")
+
+
 def compute_event_hash(
     scope_id: uuid.UUID,
     sequence: int,
     source_event_id: uuid.UUID,
     source_event_type: str,
     occurred_at: datetime,
+    correlation_id: uuid.UUID,
     payload_public: dict,
     prev_hash: str,
 ) -> str:
-    """Compute event_hash = SHA-256(canonical JSON of event fields + prev_hash).
+    """event_hash = SHA-256(canonical JSON of the event fields, including prev_hash).
 
-    Canonical form: fields sorted alphabetically, no whitespace.
-    Input includes prev_hash to form an append-only hash chain.
-    Output: 64-char lowercase hex string.
+    Field set follows SAD §12. Canonical form: keys sorted, no whitespace, UTF-8,
+    timestamps as fixed-width UTC. Output: 64-char lowercase hex.
     """
     canonical = json.dumps(
         {
@@ -34,12 +43,14 @@ def compute_event_hash(
             "sequence": sequence,
             "source_event_id": str(source_event_id),
             "source_event_type": source_event_type,
-            "occurred_at": occurred_at.isoformat(),
+            "occurred_at": canonical_timestamp(occurred_at),
+            "correlation_id": str(correlation_id),
             "payload_public": payload_public,
             "prev_hash": prev_hash,
         },
         separators=(",", ":"),
         sort_keys=True,
+        ensure_ascii=False,
     )
     return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
 
@@ -69,6 +80,22 @@ def verify_internal_key(key: str | None) -> bool:
     if not key or not settings.INTERNAL_API_KEY:
         return False
     return secrets.compare_digest(key, settings.INTERNAL_API_KEY)
+
+
+# ── User JWT (Bearer access token from auth-service) ───────────
+def decode_access_token(token: str) -> dict:
+    """Decode and verify an access token (same claims as ballot/auth services).
+
+    Fail-closed: with no JWT_SECRET configured every token is rejected.
+    """
+    if not settings.JWT_SECRET:
+        raise jwt.InvalidTokenError("JWT_SECRET not configured")
+    return jwt.decode(
+        token,
+        settings.JWT_SECRET,
+        algorithms=[settings.JWT_ALGORITHM],
+        options={"require": ["sub", "email", "role", "exp", "iat", "jti"]},
+    )
 
 
 # ── Payload allowlist projection ───────────────────────────────

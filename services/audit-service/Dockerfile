@@ -11,6 +11,8 @@ COPY services/audit-service/pyproject.toml .
 RUN pip install --no-cache-dir .
 
 COPY services/audit-service/app app/
+COPY services/audit-service/alembic.ini alembic.ini
+COPY services/audit-service/alembic alembic/
 
 EXPOSE 8004
 

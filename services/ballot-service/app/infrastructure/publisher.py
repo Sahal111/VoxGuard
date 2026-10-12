@@ -20,9 +20,11 @@ Event envelope (voxguard-contracts schema):
   "schema_version": str,
   "occurred_at":   ISO-8601,
   "correlation_id": str(uuid),
-  "source_service": "ballot-service",
+  "producer":      "ballot-service",
   "payload":       {...}   # no candidate_id, no eligibility_ref except for VoteAccepted
 }
+Envelope and exchange follow API Contract §8.1 / SAD §11.1 (exchange
+"voxguard.events", field "producer"); audit-service rejects anything else.
 
 Usage:
   publisher = OutboxPublisher(settings.RABBITMQ_URL)
@@ -42,6 +44,7 @@ import uuid
 from datetime import datetime, timezone
 from typing import TYPE_CHECKING
 
+from aiormq.abc import DeliveredMessage
 from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -57,6 +60,10 @@ BATCH_SIZE = 50
 POLL_INTERVAL_SECONDS = 5
 
 
+class UnroutableEventError(Exception):
+    """Broker accepted the publish but no queue was bound, so nobody would receive it."""
+
+
 class OutboxPublisher:
     """Publishes outbox events to RabbitMQ.
 
@@ -64,7 +71,7 @@ class OutboxPublisher:
     will retry automatically when process_batch() is called.
     """
 
-    def __init__(self, rabbitmq_url: str, exchange_name: str = "voxguard"):
+    def __init__(self, rabbitmq_url: str, exchange_name: str = "voxguard.events"):
         self._url = rabbitmq_url
         self._exchange_name = exchange_name
         self._connection = None
@@ -132,7 +139,7 @@ class OutboxPublisher:
             if isinstance(event.created_at, datetime)
             else str(event.created_at),
             "correlation_id": str(event.correlation_id),
-            "source_service": "ballot-service",
+            "producer": "ballot-service",
             "payload": event.payload,
         }
         return json.dumps(envelope, default=str).encode("utf-8")
@@ -184,11 +191,16 @@ class OutboxPublisher:
                     message_id=str(event.id),
                     correlation_id=str(event.correlation_id),
                 )
-                # Publish with mandatory=False; dead-lettering handled by broker config
-                await self._exchange.publish(
+                # mandatory=True: with no queue bound the broker still Acks a confirm and
+                # silently drops the message, which would mark it PUBLISHED and lose it.
+                # An unroutable message comes back as a Basic.Return instead of an Ack.
+                confirmation = await self._exchange.publish(
                     message,
                     routing_key=event.routing_key,
+                    mandatory=True,
                 )
+                if isinstance(confirmation, DeliveredMessage):
+                    raise UnroutableEventError("no queue bound for routing key")
 
                 # Mark PUBLISHED only after broker confirmed
                 await db.execute(

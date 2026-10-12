@@ -19,13 +19,12 @@ from sqlalchemy import (
     DateTime,
     Index,
     Integer,
-    JSON,
     String,
     Text,
     UniqueConstraint,
     text,
 )
-from sqlalchemy.dialects.postgresql import UUID
+from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
 
@@ -50,7 +49,7 @@ class AuditEvent(Base):
         DateTime(timezone=True), nullable=False, server_default=text("now()")
     )
     correlation_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
-    payload_public: Mapped[dict] = mapped_column(JSON, nullable=False)
+    payload_public: Mapped[dict] = mapped_column(JSONB, nullable=False)
     prev_hash: Mapped[str] = mapped_column(String(64), nullable=False)
     event_hash: Mapped[str] = mapped_column(String(64), nullable=False)
 
@@ -160,7 +159,7 @@ class OutboxEvent(Base):
         Text, nullable=False, server_default=text("'1.0'")
     )
     correlation_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
-    payload: Mapped[dict] = mapped_column(JSON, nullable=False)
+    payload: Mapped[dict] = mapped_column(JSONB, nullable=False)
     status: Mapped[str] = mapped_column(
         Text, nullable=False, server_default=text("'PENDING'")
     )

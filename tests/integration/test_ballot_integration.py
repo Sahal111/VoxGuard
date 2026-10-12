@@ -683,7 +683,7 @@ def test_gateway_strips_x_internal_key_for_all_routes():
 @requires_mq
 @pytest.mark.asyncio
 async def test_publisher_sends_event_to_rabbitmq():
-    """OutboxPublisher.connect() and basic publish to voxguard exchange."""
+    """OutboxPublisher.connect() declares the voxguard.events exchange."""
     import sys
 
     sys.path.insert(

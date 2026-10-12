@@ -12,6 +12,7 @@ from __future__ import annotations
 import uuid
 from datetime import datetime
 
+# pyrefly: ignore [missing-import]
 from sqlalchemy import (
     BigInteger,
     Boolean,
@@ -24,7 +25,9 @@ from sqlalchemy import (
     UniqueConstraint,
     text,
 )
+# pyrefly: ignore [missing-import]
 from sqlalchemy.dialects.postgresql import JSONB, UUID
+# pyrefly: ignore [missing-import]
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
 

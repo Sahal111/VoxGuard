@@ -44,8 +44,11 @@ import uuid
 from datetime import datetime, timezone
 from typing import TYPE_CHECKING
 
+# pyrefly: ignore [missing-import]
 from aiormq.abc import DeliveredMessage
+# pyrefly: ignore [missing-import]
 from sqlalchemy import select, update
+# pyrefly: ignore [missing-import]
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.infrastructure.models import OutboxEvent

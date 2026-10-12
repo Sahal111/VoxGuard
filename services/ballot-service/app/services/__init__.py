@@ -27,10 +27,15 @@ import uuid
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
+# pyrefly: ignore [missing-import]
 import httpx
-from sqlalchemy import select, text, update
-from sqlalchemy.dialects.postgresql import insert  # generic insert() has no on_conflict_do_nothing
+# pyrefly: ignore [missing-import]
+from sqlalchemy import select, update
+# pyrefly: ignore [missing-import]
+from sqlalchemy.dialects.postgresql import insert
+# pyrefly: ignore [missing-import]
 from sqlalchemy.exc import IntegrityError
+# pyrefly: ignore [missing-import]
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings

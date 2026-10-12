@@ -15,9 +15,13 @@ import uuid
 from dataclasses import dataclass
 from datetime import datetime
 
+# pyrefly: ignore [missing-import]
 from sqlalchemy import func, select, text
+# pyrefly: ignore [missing-import]
 from sqlalchemy.dialects.postgresql import insert as pg_insert
+# pyrefly: ignore [missing-import]
 from sqlalchemy.exc import IntegrityError
+# pyrefly: ignore [missing-import]
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.core.config import settings

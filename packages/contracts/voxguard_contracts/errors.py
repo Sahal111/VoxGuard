@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+# pyrefly: ignore [missing-import]
 from pydantic import BaseModel, Field
 
 

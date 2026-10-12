@@ -23,13 +23,18 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Sequence
 
+# pyrefly: ignore [missing-import]
 import aio_pika
+# pyrefly: ignore [missing-import]
 from aio_pika.abc import AbstractIncomingMessage
+# pyrefly: ignore [missing-import]
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
+# pyrefly: ignore [missing-import]
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.core.security import canonical_timestamp, project_payload
 from app.services.chain import record_event
+# pyrefly: ignore [missing-import]
 from voxguard_contracts import EventEnvelope, EventType, Producer
 
 logger = logging.getLogger("audit_service.consumer")

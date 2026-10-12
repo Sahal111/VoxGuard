@@ -6,6 +6,7 @@ import enum
 from datetime import datetime
 from uuid import UUID
 
+# pyrefly: ignore [missing-import]
 from pydantic import BaseModel, Field
 
 

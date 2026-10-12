@@ -285,6 +285,7 @@ networks:
 
 # ── Volumes ─────────────────────────────────────────────────────────
 volumes:
-  pg_data:
-  rabbitmq_data:
-  audit_checkpoints:
+  pg_data: {}
+  rabbitmq_data: {}
+  audit_checkpoints: {}
+

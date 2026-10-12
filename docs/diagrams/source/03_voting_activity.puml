@@ -1,0 +1,175 @@
+@startuml 03_voting_activity
+' VoxGuard - Activity Diagram Alur Pemungutan Suara (RANCANGAN / PROPOSED)
+' Sumber: SRS FR-AUTH/FR-ELIG/FR-BALL/FR-AUDT/FR-RSLT, SAD Bagian 7.3, 9, 10, 12, 13; ARCHITECTURE E.1-E.4
+
+skinparam dpi 170
+skinparam defaultFontName "DejaVu Sans"
+skinparam defaultFontSize 15
+skinparam backgroundColor #FFFFFF
+skinparam shadowing false
+skinparam ArrowColor #1F2937
+skinparam ActivityBorderColor #1F2937
+skinparam ActivityBackgroundColor #F3F4F6
+skinparam ActivityDiamondBorderColor #1F2937
+skinparam ActivityDiamondBackgroundColor #FFF7ED
+skinparam SwimlaneBorderColor #9CA3AF
+skinparam SwimlaneTitleFontStyle bold
+skinparam NoteBorderColor #9CA3AF
+skinparam NoteBackgroundColor #FEF9C3
+skinparam NoteFontSize 14
+skinparam title {
+  FontSize 24
+}
+skinparam legend {
+  BackgroundColor #FFFFFF
+  BorderColor #9CA3AF
+  FontSize 14
+}
+skinparam wrapWidth 260
+skinparam maxMessageSize 260
+
+title VoxGuard - Activity Diagram Alur Pemungutan Suara\n<size:16>Status: RANCANGAN (Proposed / Draft) - belum ada kode; mengikuti SRS, SAD, dan Database Design</size>
+
+|Pemilih|
+start
+:Mengakses sistem dan\nmengisi email + password;
+
+|Frontend + API Gateway|
+:Kirim POST /auth/login\n(rate limit, request ID);
+
+|Auth Service|
+:Cek lockout, verifikasi\nhash Argon2id;
+if (Kredensial valid dan\nakun tidak terkunci?) then (tidak)
+  |Frontend + API Gateway|
+  #FFE4E6:Tolak: 401 UNAUTHORIZED (generik)\natau 423 ACCOUNT_LOCKED;
+  |Pemilih|
+  #FFE4E6:Lihat pesan gagal login;
+  stop
+else (ya)
+endif
+:Terbitkan access token (JWT)\ndan refresh token;
+
+|Pemilih|
+:Membuka pemilihan\n(meminta surat suara);
+
+|Frontend + API Gateway|
+:Verifikasi JWT lokal, denylist jti,\nrole VOTER;
+
+|Voter Service|
+:Periksa kelayakan: terdaftar di daftar\npemilih, pemilihan OPEN dan\nnow <= end_at, belum VOTED;
+if (Pemilih memenuhi syarat\ndan pemilihan OPEN?) then (tidak)
+  #FFE4E6:Tolak: VOTER_NOT_ELIGIBLE (403),\nVOTER_ALREADY_VOTED (409), atau\nELECTION_NOT_OPEN (409);
+  |Pemilih|
+  #FFE4E6:Lihat pesan penolakan;
+  stop
+else (ya)
+endif
+:Terbitkan vote ticket berpseudonim\n(election_id + eligibility_ref,\ntanpa user_id dan email);
+
+|Pemilih|
+:Memilih kandidat dan\nmengonfirmasi;
+
+|Frontend + API Gateway|
+:Kirim POST /ballots dengan Idempotency-Key.\nGateway membuang header identitas;
+
+|Ballot Service|
+:Validasi: vote_ticket (tanda tangan, exp,\nelection_id), election_gates,\nkandidat milik pemilihan;
+|Voter Service|
+:Ballot Service menanyakan status pemilihan\n(sinkron, tanpa cache);
+|Ballot Service|
+if (Validasi lolos dan status\npemilihan OPEN?) then (tidak)
+  #FFE4E6:Tolak: VOTE_TICKET_INVALID (403),\nELECTION_NOT_OPEN (409),\nVALIDATION_ERROR (422), atau\nSERVICE_UNAVAILABLE (503, fail-closed);
+  |Pemilih|
+  #FFE4E6:Lihat pesan penolakan;
+  stop
+else (ya)
+endif
+
+|Ballot Service|
+partition "Satu transaksi lokal ballot_db" #E0F2E0 {
+  :INSERT idempotency_records\n(UNIQUE eligibility_ref + Idempotency-Key);
+  if (Key sama dan\nrequest_hash sama?) then (ya, retry)
+    #E0F2FE:Kembalikan respons tersimpan ke pemilih\n(200, Idempotent-Replayed: receipt sama,\ntanpa suara baru);
+    stop
+  else (tidak)
+  endif
+  if (Key sama tetapi\nrequest_hash berbeda?) then (ya)
+    #FFE4E6:ROLLBACK; tolak ke pemilih:\n409 IDEMPOTENCY_CONFLICT;
+    stop
+  else (tidak)
+  endif
+  :INSERT ballots\n(UNIQUE election_id + eligibility_ref);
+  if (Pelanggaran UNIQUE?\n(suara ganda atau request paralel)) then (ya)
+    #FFE4E6:ROLLBACK; tolak ke pemilih:\n409 VOTER_ALREADY_VOTED;
+    stop
+  else (tidak)
+  endif
+  :INSERT outbox_events (VoteAccepted),\nUPDATE snapshot idempotency, COMMIT;
+}
+:Hasilkan receipt (receipt_id + receipt_code)\nstatus audit PENDING, tanpa pilihan;
+
+|Pemilih|
+:Menerima konfirmasi dan receipt;
+
+|Ballot Service|
+note right
+  Di luar transaksi database:
+  relay outbox mempublikasikan event
+  ke RabbitMQ (at-least-once)
+end note
+:Relay outbox publish\nVoteAccepted ke RabbitMQ;
+
+|Audit Service|
+:Konsumsi event; cek duplikat;
+if (Event sudah pernah diproses?) then (ya)
+  :Ack tanpa efek bisnis baru;
+else (tidak)
+  :Proyeksi allowlist (tanpa identitas,\ncandidate_id, eligibility_ref);
+  :Append hash chain per scope;
+  :Publikasikan AuditRecorded;
+endif
+
+|Ballot Service|
+:Catat audit_acks;\nreceipt menjadi RECORDED;
+
+|Voter Service|
+:Tandai pemilih VOTED\n(eventual, bukan penjaga utama);
+
+|Admin / Result Service|
+:Admin menutup pemilihan\n(OPEN -> CLOSED);
+:Admin menjalankan tally\n(hanya saat CLOSED);
+:Hitung suara dari ekspor internal Ballot;
+:Rekonsiliasi tiga arah (B = A = V),\ndigest, dan ballot_commitment;
+if (Tally COMPLETED dan\nrekonsiliasi MATCH?) then (tidak)
+  #FFE4E6:RECONCILIATION_FAILED / INTEGRITY_FAILED;\nfinalisasi ditolak; tunggu backlog\nlalu tally ulang (run baru);
+  stop
+else (ya)
+endif
+:Verifikasi hash chain audit\n(prasyarat finalisasi);
+if (Audit VALID?) then (tidak)
+  #FFE4E6:Tolak finalisasi:\nAUDIT_VERIFICATION_FAILED;
+  stop
+else (ya)
+endif
+:Admin memfinalisasi hasil: simpan\nfinal_results immutable + result_hash;
+:Publikasikan ResultFinalized;
+
+|Voter Service|
+:Menerapkan status FINALIZED (eventual);
+
+|Pemilih|
+:Melihat hasil final;
+stop
+
+legend right
+  <b>Legenda</b>
+  Persegi panjang bulat : aktivitas
+  Belah ketupat         : keputusan (decision)
+  Kotak merah muda      : kondisi gagal / penolakan
+  Kotak hijau           : satu transaksi database lokal
+  Lajur (swimlane)      : pelaku atau layanan
+  Catatan batas: eligibility_ref pseudonim mengurangi risiko
+  pengaitan identitas-pilihan, bukan anonimitas sempurna.
+  Seluruhnya RANCANGAN, bukan hasil implementasi.
+endlegend
+@enduml

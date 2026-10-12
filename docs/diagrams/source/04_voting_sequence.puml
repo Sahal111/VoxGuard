@@ -1,0 +1,222 @@
+@startuml 04_voting_sequence
+' VoxGuard - Sequence Diagram Pemberian Suara (RANCANGAN / PROPOSED)
+' Sumber: docs/03_SYSTEM_ARCHITECTURE_DOCUMENT.md (Bagian 9-11), docs/ARCHITECTURE.md (D.9, E.1-E.3),
+'         docs/04_DATABASE_DESIGN_ERD.md (Bagian 8), docs/05_API_CONTRACT_SPECIFICATION.md
+' Render: java -DPLANTUML_LIMIT_SIZE=20000 -jar plantuml.jar -tpng -charset UTF-8 -o .. 04_voting_sequence.puml
+
+skinparam dpi 170
+skinparam defaultFontName "DejaVu Sans"
+skinparam defaultFontSize 15
+skinparam backgroundColor #FFFFFF
+skinparam shadowing false
+skinparam maxMessageSize 250
+skinparam ParticipantPadding 10
+skinparam BoxPadding 6
+skinparam sequence {
+  ArrowColor #1F2937
+  LifeLineBorderColor #6B7280
+  LifeLineBackgroundColor #E5E7EB
+  ParticipantBorderColor #1F2937
+  ParticipantBackgroundColor #F3F4F6
+  ActorBorderColor #1F2937
+  ActorBackgroundColor #FFFFFF
+  GroupBorderColor #6B7280
+  GroupBackgroundColor #FFFFFF
+  DividerBorderColor #6B7280
+  DividerBackgroundColor #E5E7EB
+}
+skinparam note {
+  BorderColor #9CA3AF
+  BackgroundColor #FEF9C3
+  FontSize 14
+}
+skinparam title {
+  FontSize 24
+}
+skinparam legend {
+  BackgroundColor #FFFFFF
+  BorderColor #9CA3AF
+  FontSize 14
+}
+
+title VoxGuard - Sequence Diagram Pemberian Suara\n<size:16>Status: RANCANGAN (Proposed / Draft) - belum ada kode; mengikuti dokumen SAD, ARCHITECTURE, dan Database Design</size>
+
+actor "Pemilih\n(VOTER)" as V
+participant "Frontend\nReact/Vite" as FE
+participant "API Gateway" as GW
+participant "Auth\nService" as AU
+participant "Voter\nService" as VO
+participant "Ballot\nService" as BA
+database "ballot_db" as DB
+queue "RabbitMQ" as MQ
+participant "Audit\nService" as AD
+
+autonumber "<b>0"
+
+== Tahap 1 - Autentikasi ==
+V -> FE : Isi email dan password
+activate FE
+FE -> GW : POST /api/v1/auth/login
+activate GW
+note over GW : Rate limit (Redis),\nX-Request-ID dibuat
+GW -> AU : Teruskan login
+activate AU
+AU -> AU : Cek lockout,\nverifikasi Argon2id
+alt Kredensial salah atau akun terkunci
+  AU --> GW : 401 UNAUTHORIZED (generik)\natau 423 ACCOUNT_LOCKED
+  GW --> FE : Error baku
+  FE --> V : Pesan gagal login
+else Kredensial benar
+  AU --> GW : access_token (JWT) dan refresh_token
+  deactivate AU
+  GW --> FE : 200 token
+  deactivate GW
+  FE --> V : Login berhasil
+end
+deactivate FE
+
+== Tahap 2 - Ballot dan vote ticket (validasi kelayakan) ==
+V -> FE : Buka pemilihan
+activate FE
+FE -> GW : GET /api/v1/elections/{id}/ballot
+activate GW
+note over GW : Verifikasi JWT lokal,\ncek denylist jti, role = VOTER
+GW -> BA : Teruskan + X-User-Id, X-User-Email\n(hanya untuk meminta ticket)
+activate BA
+BA -> VO : POST /internal/v1/elections/{id}/\neligibility/tickets
+activate VO
+VO -> VO : Cek daftar pemilih, status OPEN,\nnow <= end_at, belum VOTED
+alt Tidak terdaftar sebagai pemilih
+  VO --> BA : 403 VOTER_NOT_ELIGIBLE
+else Hak suara sudah digunakan
+  VO --> BA : 409 VOTER_ALREADY_VOTED
+else Pemilihan tidak OPEN
+  VO --> BA : 409 ELECTION_NOT_OPEN
+else Pemilih layak
+  VO --> BA : vote_ticket (election_id + eligibility_ref;\ntanpa user_id dan email)
+  deactivate VO
+  BA --> GW : Kandidat + vote_ticket
+  GW --> FE : 200 ballot
+  FE --> V : Tampilkan surat suara
+end
+deactivate BA
+deactivate GW
+deactivate FE
+
+== Tahap 3 - Pengiriman suara, pencegahan suara ganda, penyimpanan ==
+V -> FE : Pilih kandidat, konfirmasi
+activate FE
+FE -> GW : POST /api/v1/ballots\n(Idempotency-Key, vote_ticket, candidate_id)
+activate GW
+note over GW : Validasi JWT, role, rate limit.\nGateway MEMBUANG X-User-Id\ndan X-User-Email untuk endpoint ini
+GW -> BA : Teruskan TANPA header identitas
+activate BA
+BA -> BA : Verifikasi vote_ticket\n(tanda tangan, exp, aud, election_id),\ncek election_gates
+opt vote_ticket tidak valid atau kedaluwarsa
+  BA --> GW : 403 VOTE_TICKET_INVALID
+end
+BA -> VO : GET /internal/v1/elections/{id}/ballot-info\n(status tidak di-cache, timeout pendek)
+activate VO
+alt Voter Service tidak tersedia (fail-closed)
+  BA --> GW : 503 SERVICE_UNAVAILABLE
+else Pemilihan tidak OPEN / lewat end_at
+  VO --> BA : status pemilihan
+  BA --> GW : 409 ELECTION_NOT_OPEN
+else candidate_id tidak valid
+  VO --> BA : daftar kandidat
+  BA --> GW : 422 VALIDATION_ERROR
+else Validasi lolos
+  VO --> BA : OPEN, kandidat valid
+  deactivate VO
+end
+
+rnote over BA, DB #E0F2E0
+  <b>Satu transaksi lokal ballot_db</b>
+  (tidak mencakup RabbitMQ / layanan lain)
+endrnote
+BA -> DB : BEGIN; INSERT idempotency_records\nON CONFLICT DO NOTHING
+activate DB
+alt Key sama, request_hash sama (retry)
+  DB --> BA : record yang sudah ada
+  BA --> GW : 200 respons tersimpan\n(Idempotent-Replayed: true)
+else Key sama, request_hash berbeda
+  BA -> DB : ROLLBACK
+  BA --> GW : 409 IDEMPOTENCY_CONFLICT
+else Record idempotency baru
+  BA -> DB : INSERT ballots\n(UNIQUE election_id, eligibility_ref)
+  alt Pelanggaran UNIQUE (hak suara sudah dipakai,\ntermasuk request paralel)
+    DB --> BA : unique_violation
+    BA -> DB : ROLLBACK
+    BA --> GW : 409 VOTER_ALREADY_VOTED
+  else Insert berhasil
+    BA -> DB : INSERT outbox_events (VoteAccepted);\nUPDATE idempotency_records (snapshot)
+    BA -> DB : COMMIT
+    DB --> BA : commit berhasil
+    deactivate DB
+    BA --> GW : 201 receipt_id + receipt_code\n(audit_status = PENDING; tanpa pilihan)
+    deactivate BA
+    GW --> FE : 201 receipt
+    deactivate GW
+    FE --> V : Tampilkan konfirmasi dan receipt
+  end
+end
+deactivate FE
+
+== Tahap 4 - Publikasi event dan pencatatan audit (asinkron, setelah COMMIT) ==
+note over BA, AD
+  Publikasi ke RabbitMQ <b>bukan bagian</b> dari transaksi database.
+  Pengiriman at-least-once; konsumen wajib idempotent.
+end note
+loop Relay outbox (sekitar tiap 1 detik)
+  BA -> DB : SELECT outbox PENDING\nFOR UPDATE SKIP LOCKED
+  BA -> MQ : Publish vote.accepted (confirm)
+  activate MQ
+  MQ --> BA : ack
+  BA -> DB : UPDATE status = PUBLISHED
+end
+opt RabbitMQ tidak tersedia
+  note over BA, MQ
+    Suara tetap diterima; outbox PENDING;
+    relay retry dengan backoff.
+    Receipt tetap PENDING.
+  end note
+end
+MQ -> AD : Deliver VoteAccepted
+deactivate MQ
+activate AD
+AD -> AD : Cek duplikat\n(processed_events, UNIQUE source_event_id)
+alt Event sudah pernah diproses
+  AD -> MQ : ack tanpa efek bisnis baru
+else Event baru
+  AD -> AD : Proyeksi allowlist (buang eligibility_ref),\nhitung event_hash, append hash chain\n(satu transaksi lokal audit_db)
+  AD -> MQ : Publish AuditRecorded (via outbox audit_db)
+  deactivate AD
+  activate MQ
+  MQ -> BA : AuditRecorded
+  activate BA
+  BA -> DB : INSERT audit_acks\n(receipt menjadi RECORDED)
+  deactivate BA
+  MQ -> VO : VoteAccepted
+  activate VO
+  VO -> VO : Tandai VOTED (eventual;\nbukan penjaga utama)
+  deactivate VO
+  deactivate MQ
+end
+
+note over V, AD #FFE4E6
+  <b>Catatan batas rancangan</b>
+  - RECORDED = tercatat di hash chain, bukan "sudah terverifikasi" (verifikasi lewat endpoint verify).
+  - eligibility_ref pseudonim mengurangi risiko pengaitan identitas-pilihan, bukan anonimitas sempurna.
+  - Result Service tidak menghitung selama pemilihan OPEN; tally hanya setelah CLOSED (lihat Diagram 03).
+end note
+
+legend right
+  <b>Legenda</b>
+  ->     pesan sinkron (HTTP / SQL)
+  -->    balasan (return)
+  Kotak hijau : satu transaksi database lokal
+  alt / opt / loop : kondisi, opsi, pengulangan
+  Catatan kuning : penjelasan mekanisme
+  Seluruhnya RANCANGAN, bukan hasil implementasi
+endlegend
+@enduml
